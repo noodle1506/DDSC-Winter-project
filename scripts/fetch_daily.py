@@ -28,6 +28,7 @@ def main() -> None:
     save_raw_json(resp.raw, str(out_path))
 
     print(f"Saved raw JSON to: {out_path}")
+    print(f"Full path: {out_path.resolve()}")
     print(f"Function used: {resp.function}")
 
 
