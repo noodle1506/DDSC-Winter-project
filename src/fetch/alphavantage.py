@@ -11,12 +11,14 @@ import requests
 
 @dataclass
 class FetchResponse:
-    """Response from Alpha Vantage API fetch."""
-
     raw: dict[str, Any]
     symbol: str
     function: str
     outputsize: str
+
+
+def _is_soft_error(raw: dict[str, Any]) -> bool:
+    return any(k in raw for k in ("Error Message", "Note", "Information"))
 
 
 def fetch_time_series_daily(
@@ -25,54 +27,41 @@ def fetch_time_series_daily(
     outputsize: str = "compact",
     prefer_adjusted: bool = True,
     pause_seconds: float = 12.0,
+    timeout_seconds: float = 30.0,
 ) -> FetchResponse:
-    """
-    Fetch daily time series data from Alpha Vantage API.
-
-    Args:
-        symbol: Stock symbol (e.g., 'AAPL')
-        apikey: Alpha Vantage API key
-        outputsize: 'compact' (last 100 data points) or 'full' (20+ years)
-        prefer_adjusted: If True, use TIME_SERIES_DAILY_ADJUSTED; else use TIME_SERIES_DAILY
-        pause_seconds: Seconds to pause before making request (rate limiting)
-
-    Returns:
-        FetchResponse with raw data, symbol, function, and outputsize
-    """
     if pause_seconds > 0:
         time.sleep(pause_seconds)
 
-    function = "TIME_SERIES_DAILY_ADJUSTED" if prefer_adjusted else "TIME_SERIES_DAILY"
     base_url = "https://www.alphavantage.co/query"
 
-    params = {
-        "function": function,
-        "symbol": symbol,
-        "apikey": apikey,
-        "outputsize": outputsize,
-        "datatype": "json",
-    }
+    def _call(function: str) -> dict[str, Any]:
+        params = {
+            "function": function,
+            "symbol": symbol,
+            "apikey": apikey,
+            "outputsize": outputsize,
+            "datatype": "json",
+        }
+        resp = requests.get(base_url, params=params, timeout=timeout_seconds)
+        resp.raise_for_status()
+        return resp.json()
 
-    response = requests.get(base_url, params=params)
-    response.raise_for_status()
-    raw = response.json()
+    # 1) Try adjusted if preferred
+    if prefer_adjusted:
+        raw = _call("TIME_SERIES_DAILY_ADJUSTED")
+        # if it looks blocked/rate-limited/premium/etc, fallback
+        if _is_soft_error(raw) or "Time Series (Daily)" not in raw:
+            raw = _call("TIME_SERIES_DAILY")
+            function_used = "TIME_SERIES_DAILY"
+        else:
+            function_used = "TIME_SERIES_DAILY_ADJUSTED"
+    else:
+        raw = _call("TIME_SERIES_DAILY")
+        function_used = "TIME_SERIES_DAILY"
 
-    return FetchResponse(
-        raw=raw,
-        symbol=symbol,
-        function=function,
-        outputsize=outputsize,
-    )
+    return FetchResponse(raw=raw, symbol=symbol, function=function_used, outputsize=outputsize)
 
 
 def save_raw_json(raw: dict[str, Any], filepath: str) -> None:
-    """
-    Save raw JSON data to a file.
-
-    Args:
-        raw: JSON data as dictionary
-        filepath: Path to save the JSON file
-    """
-    with open(filepath, "w") as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         json.dump(raw, f, indent=2)
-
