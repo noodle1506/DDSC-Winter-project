@@ -17,7 +17,7 @@ def main() -> None:
         apikey=ALPHAVANTAGE_API_KEY,
         outputsize=outputsize,
         prefer_adjusted=True,
-        pause_seconds=12.0,
+        pause_seconds=70.0,
     )
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
