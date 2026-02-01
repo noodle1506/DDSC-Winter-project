@@ -9,7 +9,7 @@ def fetch_stooq_daily(symbol: str) -> pd.DataFrame:
     return df
 
 def main():
-    symbol = "GOOGL"
+    symbol = "XOM"
 
     df = fetch_stooq_daily(symbol)
 
