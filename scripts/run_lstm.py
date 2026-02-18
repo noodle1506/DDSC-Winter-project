@@ -15,6 +15,7 @@ from src.models.lstm import run_lstm_pipeline
 
 def main():
     lstm_dir = OUTPUT_DIR / "lstm"
+    checkpoint_dir = lstm_dir / "checkpoints"
     total = len(TICKERS)
     all_metrics = []
 
@@ -31,11 +32,18 @@ def main():
             start = time.time()
             print(f"  [{i}/{total}] {symbol}: Training...")
             df = pd.read_csv(path, index_col="date", parse_dates=True)
-            metrics = run_lstm_pipeline(df, symbol, out_dir=lstm_dir, verbose=True)
+            metrics = run_lstm_pipeline(
+                df, symbol,
+                out_dir=lstm_dir,
+                checkpoint_dir=checkpoint_dir,
+                verbose=True,
+            )
             elapsed = time.time() - start
             all_metrics.append(metrics)
             print(f"  [{i}/{total}] {symbol}: Done in {elapsed:.0f}s — "
-                  f"RMSE={metrics['rmse']}, MAE={metrics['mae']}, MAPE={metrics['mape']}%\n")
+                  f"Test: RMSE={metrics['rmse']}, MAE={metrics['mae']}, MAPE={metrics['mape']}% | "
+                  f"Val: RMSE={metrics['val_rmse']}, MAPE={metrics['val_mape']}% | "
+                  f"Best epoch: {metrics['best_epoch']}\n")
         except Exception as e:
             print(f"  [{i}/{total}] {symbol}: FAILED — {e}\n")
 

@@ -24,18 +24,27 @@ def prepare_lstm_data(
     series: pd.Series,
     look_back: int = 60,
     test_days: int = 60,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, MinMaxScaler]:
-    """Create scaled sliding-window sequences for LSTM training.
+    val_days: int = 60,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, MinMaxScaler]:
+    """Create scaled sliding-window sequences with a 3-way split.
 
-    The scaler is fit ONLY on training data to avoid data leakage.
-    Returns X_train, y_train, X_test, y_test, scaler.
+    Split strategy (time-based, no leakage):
+      - Test:       last `test_days` rows
+      - Validation:  `val_days` rows before test
+      - Train:       everything before validation
+
+    The scaler is fit ONLY on training data.
+    Returns X_train, y_train, X_val, y_val, X_test, y_test, scaler.
     """
     values = series.values.reshape(-1, 1)
-    split = len(values) - test_days
+    n = len(values)
+    test_start = n - test_days
+    val_start = test_start - val_days
+    train_end = val_start
 
     # Fit scaler on train portion only
     scaler = MinMaxScaler()
-    scaler.fit(values[:split])
+    scaler.fit(values[:train_end])
     scaled = scaler.transform(values)
 
     # Build sequences
@@ -48,15 +57,19 @@ def prepare_lstm_data(
     y = np.array(y, dtype=np.float32)
 
     # Split — account for the look_back offset
-    train_size = split - look_back
-    X_train, X_test = X[:train_size], X[train_size:]
-    y_train, y_test = y[:train_size], y[train_size:]
+    train_size = train_end - look_back
+    val_size = val_days
 
-    # Reshape for LSTM: (samples, sequence_length, features=1)
-    X_train = X_train.reshape(-1, look_back, 1)
-    X_test = X_test.reshape(-1, look_back, 1)
+    X_train = X[:train_size].reshape(-1, look_back, 1)
+    y_train = y[:train_size]
 
-    return X_train, y_train, X_test, y_test, scaler
+    X_val = X[train_size : train_size + val_size].reshape(-1, look_back, 1)
+    y_val = y[train_size : train_size + val_size]
+
+    X_test = X[train_size + val_size :].reshape(-1, look_back, 1)
+    y_test = y[train_size + val_size :]
+
+    return X_train, y_train, X_val, y_val, X_test, y_test, scaler
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +98,9 @@ class LSTMModel(nn.Module):
         return out.squeeze(-1)
 
 
-def build_lstm_model(look_back: int = 60) -> LSTMModel:
+def build_lstm_model(hidden_size: int = 50, dropout: float = 0.2) -> LSTMModel:
     """Build and return an LSTM model."""
-    return LSTMModel(input_size=1, hidden_size=50, dropout=0.2)
+    return LSTMModel(input_size=1, hidden_size=hidden_size, dropout=dropout)
 
 
 # ---------------------------------------------------------------------------
@@ -98,39 +111,46 @@ def train_lstm(
     model: LSTMModel,
     X_train: np.ndarray,
     y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
     epochs: int = 50,
     batch_size: int = 32,
+    learning_rate: float = 0.001,
     patience: int = 5,
+    checkpoint_dir: Path | None = None,
+    symbol: str = "",
     verbose: bool = True,
-) -> list[float]:
-    """Train the LSTM model with early stopping.
+) -> dict:
+    """Train the LSTM model with early stopping and optional checkpointing.
 
-    Returns list of epoch losses.
+    Returns a dict with 'train_losses', 'val_losses', and 'best_epoch'.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
-    # Create data loaders
-    X_t = torch.from_numpy(X_train)
-    y_t = torch.from_numpy(y_train)
-
-    # Use last 10% as validation
-    val_size = max(1, int(len(X_t) * 0.1))
-    X_val, y_val = X_t[-val_size:].to(device), y_t[-val_size:].to(device)
-    X_tr, y_tr = X_t[:-val_size], y_t[:-val_size]
+    X_tr = torch.from_numpy(X_train)
+    y_tr = torch.from_numpy(y_train)
+    X_v = torch.from_numpy(X_val).to(device)
+    y_v = torch.from_numpy(y_val).to(device)
 
     train_ds = TensorDataset(X_tr, y_tr)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.MSELoss()
+
+    if checkpoint_dir is not None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     best_val_loss = float("inf")
     best_state = None
+    best_epoch = 0
     patience_counter = 0
-    losses = []
+    train_losses = []
+    val_losses = []
 
     for epoch in range(epochs):
+        # --- Train ---
         model.train()
         epoch_loss = 0.0
         for xb, yb in train_loader:
@@ -143,34 +163,50 @@ def train_lstm(
             epoch_loss += loss.item() * len(xb)
 
         epoch_loss /= len(X_tr)
-        losses.append(epoch_loss)
+        train_losses.append(epoch_loss)
 
-        # Validation
+        # --- Validate ---
         model.eval()
         with torch.no_grad():
-            val_pred = model(X_val)
-            val_loss = criterion(val_pred, y_val).item()
+            val_pred = model(X_v)
+            val_loss = criterion(val_pred, y_v).item()
+        val_losses.append(val_loss)
 
         if verbose and (epoch + 1) % 10 == 0:
             print(f"    Epoch {epoch+1}/{epochs} — train_loss={epoch_loss:.6f}, val_loss={val_loss:.6f}")
 
-        # Early stopping
+        # --- Early stopping + checkpointing ---
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            best_epoch = epoch + 1
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
             patience_counter = 0
+
+            # Save checkpoint to disk
+            if checkpoint_dir is not None:
+                ckpt_path = checkpoint_dir / f"{symbol}_best.pt"
+                torch.save({
+                    "epoch": best_epoch,
+                    "model_state_dict": best_state,
+                    "val_loss": best_val_loss,
+                }, ckpt_path)
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 if verbose:
-                    print(f"    Early stopping at epoch {epoch+1}")
+                    print(f"    Early stopping at epoch {epoch+1} (best epoch: {best_epoch})")
                 break
 
     # Restore best weights
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    return losses
+    return {
+        "train_losses": train_losses,
+        "val_losses": val_losses,
+        "best_epoch": best_epoch,
+        "best_val_loss": best_val_loss,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -182,39 +218,67 @@ def run_lstm_pipeline(
     symbol: str,
     look_back: int = 60,
     test_days: int = 60,
+    val_days: int = 60,
+    hidden_size: int = 50,
+    learning_rate: float = 0.001,
+    batch_size: int = 32,
     epochs: int = 50,
     out_dir: Path | None = None,
+    checkpoint_dir: Path | None = None,
     verbose: bool = True,
 ) -> dict:
     """Full LSTM pipeline: prepare data, train, predict, evaluate, save outputs."""
     close = df["close"]
 
-    if len(close) < look_back + test_days + 60:
-        raise ValueError(f"{symbol}: not enough data ({len(close)} rows)")
+    min_required = look_back + val_days + test_days + 60
+    if len(close) < min_required:
+        raise ValueError(f"{symbol}: not enough data ({len(close)} rows, need {min_required})")
 
-    # Prepare data
-    X_train, y_train, X_test, y_test, scaler = prepare_lstm_data(
-        close, look_back=look_back, test_days=test_days
+    # Prepare data (3-way split)
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler = prepare_lstm_data(
+        close, look_back=look_back, test_days=test_days, val_days=val_days
     )
 
     # Build and train
-    model = build_lstm_model(look_back)
-    train_lstm(model, X_train, y_train, epochs=epochs, verbose=verbose)
+    model = build_lstm_model(hidden_size=hidden_size)
+    history = train_lstm(
+        model, X_train, y_train, X_val, y_val,
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
+        checkpoint_dir=checkpoint_dir, symbol=symbol, verbose=verbose,
+    )
 
-    # Predict
+    # Predict on test set
     device = next(model.parameters()).device
     model.eval()
     with torch.no_grad():
         X_test_t = torch.from_numpy(X_test).to(device)
-        predictions_scaled = model(X_test_t).cpu().numpy()
+        pred_scaled = model(X_test_t).cpu().numpy()
 
     # Inverse transform back to original scale
-    predictions = scaler.inverse_transform(predictions_scaled.reshape(-1, 1)).flatten()
+    predictions = scaler.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
     actual = close.iloc[-test_days:].values
 
+    # Also get validation predictions for reporting
+    with torch.no_grad():
+        X_val_t = torch.from_numpy(X_val).to(device)
+        val_pred_scaled = model(X_val_t).cpu().numpy()
+    val_predictions = scaler.inverse_transform(val_pred_scaled.reshape(-1, 1)).flatten()
+    val_actual = close.iloc[-(test_days + val_days):-test_days].values
+
     # Metrics
-    metrics = compute_metrics(actual, predictions)
-    metrics["symbol"] = symbol
+    test_metrics = compute_metrics(actual, predictions)
+    val_metrics = compute_metrics(val_actual, val_predictions)
+
+    metrics = {
+        "symbol": symbol,
+        "rmse": test_metrics["rmse"],
+        "mae": test_metrics["mae"],
+        "mape": test_metrics["mape"],
+        "val_rmse": val_metrics["rmse"],
+        "val_mae": val_metrics["mae"],
+        "val_mape": val_metrics["mape"],
+        "best_epoch": history["best_epoch"],
+    }
 
     # Save outputs
     if out_dir is not None:
@@ -229,14 +293,16 @@ def run_lstm_pipeline(
         })
         results.to_csv(out_dir / f"{symbol}_lstm_results.csv", index=False)
 
-        # Save model
+        # Save final model
         torch.save(model.state_dict(), out_dir / f"{symbol}_lstm_model.pt")
 
-        # Plot
+        # Forecast plot
         fig, ax = plt.subplots(figsize=(12, 6))
-        tail_train = close.iloc[-(120 + test_days):-test_days]
+        tail_train = close.iloc[-(120 + test_days + val_days):-(test_days + val_days)]
+        val_index = df.index[-(test_days + val_days):-test_days]
         ax.plot(tail_train.index, tail_train.values, label="Train (last 120 days)", color="blue")
-        ax.plot(test_index, actual, label="Actual", color="green")
+        ax.plot(val_index, val_actual, label="Validation", color="orange")
+        ax.plot(test_index, actual, label="Actual (test)", color="green")
         ax.plot(test_index, predictions, label="LSTM Forecast", color="red", linestyle="--")
         ax.set_title(f"{symbol} — LSTM Forecast (look_back={look_back})")
         ax.set_xlabel("Date")
@@ -245,6 +311,22 @@ def run_lstm_pipeline(
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         fig.savefig(out_dir / f"{symbol}_lstm_forecast.png", dpi=150)
+        plt.close(fig)
+
+        # Loss curve plot
+        fig, ax = plt.subplots(figsize=(10, 5))
+        epochs_range = range(1, len(history["train_losses"]) + 1)
+        ax.plot(epochs_range, history["train_losses"], label="Train Loss")
+        ax.plot(epochs_range, history["val_losses"], label="Validation Loss")
+        ax.axvline(history["best_epoch"], color="red", linestyle=":", alpha=0.7,
+                    label=f"Best Epoch ({history['best_epoch']})")
+        ax.set_title(f"{symbol} — Training Loss Curve")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("MSE Loss")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        fig.savefig(out_dir / f"{symbol}_loss_curve.png", dpi=150)
         plt.close(fig)
 
     return metrics
