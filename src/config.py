@@ -12,10 +12,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
-ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "").strip()
+# Optional — only needed if using the AlphaVantage fetcher
+ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "").strip() or None
 
-if not ALPHAVANTAGE_API_KEY:
-    raise RuntimeError(
-        f"Missing ALPHAVANTAGE_API_KEY. Expected it in {ENV_PATH}. "
-        "Create a .env file with ALPHAVANTAGE_API_KEY=..."
-    )
+# Standard directories
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+OUTPUT_DIR = PROJECT_ROOT / "outputs"

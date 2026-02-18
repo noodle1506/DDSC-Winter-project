@@ -14,3 +14,9 @@ venv/
 .venv/
 
 .vscode/
+
+# Data and outputs (large files)
+data/
+outputs/
+*.h5
+*.keras
