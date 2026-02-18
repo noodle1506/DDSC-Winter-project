@@ -23,7 +23,7 @@ def summary_statistics(dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
             "trading_days": len(df),
             "close_mean": round(close.mean(), 2),
             "close_std": round(close.std(), 2),
-            "close_min": round(close.min(), 2),
+            "close_min": round(close.min(), 4),
             "close_max": round(close.max(), 2),
             "return_mean": round(ret.mean() * 100, 4),
             "return_std": round(ret.std() * 100, 4),

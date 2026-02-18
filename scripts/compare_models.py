@@ -103,11 +103,8 @@ def main():
     fig.savefig(comp_dir / "mape_comparison.png", dpi=150)
     plt.close(fig)
 
-    # --- Overlay plots for 3 most interesting tickers (highest MAPE difference) ---
-    merged["mape_diff"] = abs(merged["mape_arima"] - merged["mape_lstm"])
-    top3 = merged.nlargest(3, "mape_diff")["symbol"].tolist()
-
-    for symbol in top3:
+    # --- Overlay plots for all tickers ---
+    for symbol in symbols:
         arima_results_path = arima_dir / f"{symbol}_arima_results.csv"
         lstm_results_path = lstm_dir / f"{symbol}_lstm_results.csv"
 

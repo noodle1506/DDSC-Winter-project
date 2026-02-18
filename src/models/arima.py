@@ -60,8 +60,8 @@ def run_arima_pipeline(
     # Last known price before the test period (anchor for reconstruction)
     last_train_price = close.iloc[-(test_days + 1)]
 
-    # Fit ARIMA on returns
-    model = fit_arima(train_returns)
+    # Fit ARIMA on returns (reset index to avoid statsmodels frequency warnings)
+    model = fit_arima(train_returns.reset_index(drop=True))
 
     # Forecast returns
     forecast_returns = model.predict(n_periods=test_days)

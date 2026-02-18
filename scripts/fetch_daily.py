@@ -1,8 +1,11 @@
 # scripts/fetch_daily.py
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ALPHAVANTAGE_API_KEY
 from src.fetch.alphavantage import fetch_time_series_daily, save_raw_json

@@ -228,6 +228,9 @@ def run_lstm_pipeline(
     verbose: bool = True,
 ) -> dict:
     """Full LSTM pipeline: prepare data, train, predict, evaluate, save outputs."""
+    torch.manual_seed(42)
+    np.random.seed(42)
+
     close = df["close"]
 
     min_required = look_back + val_days + test_days + 60
