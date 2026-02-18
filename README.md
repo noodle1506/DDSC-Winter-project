@@ -87,5 +87,5 @@ After running the pipeline, check the `outputs/` folder:
 - **Data**: Daily OHLCV from Stooq (free API, full history available)
 - **Test set**: Last 60 trading days (~3 months), time-based split
 - **ARIMA**: Auto-selected (p,d,q) via `pmdarima.auto_arima`
-- **LSTM**: 2-layer LSTM (50 units each), dropout 0.2, 60-day look-back window, MinMaxScaler fit on training data only, early stopping with patience=5
+- **LSTM**: 2-layer (Hyper-tuned) LSTM (50 units each), dropout 0.2, 60-day look-back window, MinMaxScaler fit on training data only, early stopping with patience=5
 - **Metrics**: RMSE, MAE, MAPE
